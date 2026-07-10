@@ -116,6 +116,14 @@ Persona dispatch respects the harness's active-subagent limit. Selected reviewer
 
 The output names which personas ran, which were activated by what signals, and whether any failed or timed out. The user can audit "did the right reviewers actually look at this" without parsing internal state.
 
+### 9. Cross-model judgment pass
+
+The **conditional judgment trio** — `adversarial-document-reviewer`, `product-lens-reviewer`, `security-lens-reviewer` — also runs through a **different model family** than the host (Codex when the host is Claude/Cursor; Claude when the host is Codex), in a separate read-only process, whenever those lenses activate. These are the lenses whose output diverges most across models — premise falsification, strategic-claim challenge, and threat coverage — so a second, genuinely independent model surfaces findings the host model misses, and agreement between a peer return and its in-process twin is the strongest promotion signal in the synthesis (different model families, separate processes). The convergent lenses (coherence, scope-guardian) and the always-on feasibility lens stay single-model — feasibility is excluded specifically so the pass stays conditional and doesn't spawn a peer on every review.
+
+The peer is **tiered per lens**: `security-lens` is knowledge-bound, so it runs on the flagship model (threat breadth is the lever); `adversarial` and `product-lens` are reasoning-bound, so they run on a mid-tier model at high reasoning (deliberation is the lever, not model tier). The pass is **non-blocking** — a missing peer CLI, an unauthenticated peer, or a timeout skips silently and the review completes exactly as it would single-model. It runs in both interactive and headless modes.
+
+**Trust boundary:** the pass embeds the full document content into the peer prompt and sends it to the external model provider (OpenAI for the Codex peer, Anthropic for the Claude peer). The peer runs strictly read-only, so impact is bounded to disclosure rather than repo mutation, and the script emits a one-line audit log of each cross-model send so the egress is auditable even in headless mode. A document from an untrusted author is a prompt-injection surface contained by the read-only posture to disclosure-to-self.
+
 ---
 
 ## Quick Example
@@ -184,7 +192,10 @@ Headless mode requires a path; without one it errors out rather than guessing.
 ## FAQ
 
 **What's the difference between this and `ce-code-review`?**
-`ce-code-review` reviews diffs (code changes); `ce-doc-review` reviews docs (requirements, plans). Different reviewer personas, different findings shape, different routing. Both share the multi-persona dispatch + synthesis pattern but are tuned for their respective artifact types.
+`ce-code-review` reviews diffs (code changes); `ce-doc-review` reviews docs (requirements, plans). Different reviewer personas, different findings shape, different routing. Both share the multi-persona dispatch + synthesis pattern, and both now run a **cross-model pass** — `ce-code-review` runs its single adversarial lens cross-model, while `ce-doc-review` runs the three-lens judgment trio (adversarial, product-lens, security-lens), because doc-review's high-value judgment is spread across more lenses.
+
+**Which lenses run cross-model, and why not all of them?**
+Only the judgment trio — adversarial, product-lens, security-lens — because those are where a second model's different priors and knowledge produce genuinely different findings, so agreement carries real signal. Coherence and scope-guardian are convergent (a second model just echoes them), and feasibility is always-on, so running it cross-model would spawn a peer on every review rather than only on documents that warrant deeper scrutiny.
 
 **Why does the decision primer matter?**
 Without it, every round re-surfaces the same findings, including ones the user already rejected. The primer uses fingerprint + evidence-snippet matching to suppress rejected findings and verify applied fixes — making round-to-round refinement actually iterate, not loop.

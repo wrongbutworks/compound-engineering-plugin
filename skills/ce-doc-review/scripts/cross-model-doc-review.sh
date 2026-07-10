@@ -85,6 +85,17 @@ SCHEMA="$SKILL_ROOT/references/findings-schema.json"
 [ -f "$SCHEMA" ]  || skip "findings schema not found at $SCHEMA; skipping"
 SCHEMA_CONTENT="$(cat "$SCHEMA")" || skip "cannot read findings schema; skipping"
 
+# The peer adapts on the same context slots (Document type / Origin) the in-process
+# reviewer does, but the trio persona briefs only define adaptation for the bare
+# `requirements`/`plan` values. The canonical context-slot rules -- which map
+# `unified-*` onto their base branch, carry the unified slice-suppression rules, and
+# define how to read non-path Origin values -- live only in the subagent template, so
+# extract them from there (single source of truth) and fold them into the peer prompt.
+# Best-effort: a missing block degrades unified/Origin scoping but must not fail the pass.
+TEMPLATE="$SKILL_ROOT/references/subagent-template.md"
+CONTEXT_SLOT_RULES="$(awk '/<context-slots-rules>/{f=1} f; /<\/context-slots-rules>/{if(f)exit}' "$TEMPLATE" 2>/dev/null)"
+[ -n "$CONTEXT_SLOT_RULES" ] || log "context-slot rules not found in $TEMPLATE; peer prompt will omit unified/Origin adaptation rules"
+
 OUT="$RUN_DIR/$REVIEWER_NAME-$PEER.json"
 PROMPT_FILE="$(mktemp "${TMPDIR:-/tmp}/xmodel-doc-prompt-XXXXXX")"
 PEERLOG="$(mktemp "${TMPDIR:-/tmp}/xmodel-doc-log-XXXXXX")"
@@ -111,6 +122,7 @@ trap 'rm -f "$PROMPT_FILE" "$PEERLOG"' EXIT
   printf 'Document content:\n'
   cat "$DOC_PATH"
   printf '\n</review-context>\n'
+  [ -n "$CONTEXT_SLOT_RULES" ] && printf '\n%s\n' "$CONTEXT_SLOT_RULES"
 } > "$PROMPT_FILE"
 
 # --- run the peer: idle-timeout for streaming codex, hard cap for claude ----

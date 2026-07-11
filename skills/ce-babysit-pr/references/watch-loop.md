@@ -40,7 +40,7 @@ Because every tick is resumable from disk, checkpoint mode is not degraded corre
 
 An orchestrator (`lfg`) drives ticks in-line and needs the loop to terminate. Run ticks back-to-back until the stop below. **To wait for CI to progress between ticks, use the harness's native non-blocking wait — never a bare foreground `sleep`** (blocked on Claude Code, discouraged elsewhere): Claude Code's `Monitor` until-loop; Grok's `get_command_or_subagent_output(timeout_ms=…)` or a `monitor`; Cursor's `Await` on a backgrounded `gh pr checks --watch`. If the harness has no non-blocking wait, do one tick and return control to the orchestrator rather than busy-spinning. Loop until:
 
-- **all checks are terminal** (each `COMPLETED`/errored, none `IN_PROGRESS` or `QUEUED`) **and** the actionable backlog is empty — success; or
+- **all checks are terminal** (each `COMPLETED`/errored, none `IN_PROGRESS` or `QUEUED`), **at least one check was actually observed** (`checks_present` — an empty `statusCheckRollup` right after PR creation means Actions has not created check-runs yet, not that CI passed; keep ticking until checks materialize or the time budget expires, then return `no-checks-observed`), **and** the actionable backlog is empty — success; or
 - a **budget** is hit: default **3 CI fix rounds** per head-lineage (mirrors `lfg`'s historical cap) and an overall time cap (~30-45 min). On budget-exhaust, the still-red checks and any `needs-human` items become residuals.
 
 Never wait on the merge-ready settle window or human review in pipeline mode — those are interactive stops. A check stuck `IN_PROGRESS` past the time cap ends the run with a "CI still running" residual rather than blocking forever.

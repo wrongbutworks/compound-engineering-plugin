@@ -232,6 +232,33 @@ describe("ce-babysit-pr pr-snapshot engine", () => {
     expect(d.blocked_external).toBe(true)
   })
 
+  test("an empty statusCheckRollup (no check-runs yet) is not ok — checks_present false blocks a pipeline false-success", () => {
+    const noChecks = { ...FAILING, merge_state_status: "CLEAN", review_decision: "APPROVED", checks: [], threads: [] }
+    const d = snapshot(state, fetchFile(dir, "nc.json", noChecks))
+    expect(d.checks_present).toBe(false)
+    expect(d.all_checks_ok).toBe(false) // no observed checks -> not "ok"; the pipeline stop must not exit-success
+    expect(d.checks_terminal).toBe(true) // vacuously terminal on an empty set — exactly why checks_present is needed
+  })
+
+  test("_resolve_repo_ref parses the host from the PR URL so gh api targets GHE, not github.com", () => {
+    const r = spawnSync(
+      "python3",
+      [
+        "-c",
+        `from importlib.machinery import SourceFileLoader; ` +
+          `m=SourceFileLoader('prs', ${JSON.stringify(SCRIPT)}).load_module(); ` +
+          `print(m._resolve_repo_ref('', 'https://ghe.acme.com/o/r/pull/5')); ` +
+          `print(m._host_args('ghe.acme.com')); print(m._host_args(None))`,
+      ],
+      { encoding: "utf8" },
+    )
+    expect(r.status, r.stderr).toBe(0)
+    const lines = r.stdout.trim().split("\n")
+    expect(lines[0]).toBe("('o', 'r', 'ghe.acme.com')")
+    expect(lines[1]).toBe("['--hostname', 'ghe.acme.com']")
+    expect(lines[2]).toBe("[]")
+  })
+
   test("cross-stream alternation: ci-only then review-only then ci-only ticks flip (churn signal)", () => {
     const th = (ids: string[]) => ids.map((id) => ({ thread_id: id, last_comment_id: `c-${id}`, last_comment_at: id }))
     snapshot(state, fetchFile(dir, "a1.json", { ...FAILING, head_sha: "s1", checks: [RED_CHECK], threads: [] }))

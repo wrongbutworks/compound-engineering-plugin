@@ -78,15 +78,21 @@ def _split_repo(repo):
     return None, None
 
 
-def _resolve_owner_name(repo, url):
-    """Resolve (owner, name) from --repo, else the PR url, else one `gh repo view` call.
-    Parsing the url (already fetched by `fetch`) avoids a redundant `gh repo view` per tick."""
+def _resolve_repo_ref(repo, url):
+    """Resolve (owner, name, host) from --repo + the PR url, else one `gh repo view` call.
+    The host is parsed from the url and threaded into every `gh api` call so a GitHub Enterprise
+    PR queries the right host — without it, `gh api` defaults to github.com and a GHE babysitter
+    fetches the PR via `gh pr view` but then reads review threads / workflow runs from github.com.
+    Parsing the url (already fetched by `fetch`) also avoids a redundant `gh repo view` per tick."""
     owner, name = _split_repo(repo)
-    if not owner and url:
-        # https://<host>/OWNER/NAME/pull/N -> parts[-4], parts[-3]  (host-agnostic; GHE too)
+    host = None
+    if url:
+        # https://<host>/OWNER/NAME/pull/N
         parts = url.rstrip("/").split("/")
-        if len(parts) >= 4:
-            owner, name = parts[-4], parts[-3]
+        if len(parts) >= 5 and parts[0].startswith("http"):
+            host = parts[2]
+            if not owner:
+                owner, name = parts[-4], parts[-3]
     if not owner:
         r = _run(["gh", "repo", "view", "--json", "owner,name"])
         if r.returncode == 0:
@@ -94,7 +100,12 @@ def _resolve_owner_name(repo, url):
             owner, name = info.get("owner", {}).get("login"), info.get("name")
     if not owner or not name:
         raise SystemExit("could not resolve owner/repo; pass --repo OWNER/REPO")
-    return owner, name
+    return owner, name, host
+
+
+def _host_args(host):
+    """`gh api --hostname` selector so GHE calls hit the PR's host, not the default github.com."""
+    return ["--hostname", host] if host else []
 
 
 def _thread_identity(t):
@@ -133,7 +144,7 @@ def fetch(pr, repo):
                 "details_url": c.get("detailsUrl"),
             })
 
-    owner, name = _resolve_owner_name(repo, v.get("url"))
+    owner, name, host = _resolve_repo_ref(repo, v.get("url"))
     head = v.get("headRefOid")
     return {
         "pr_state": v.get("state"),
@@ -143,19 +154,20 @@ def fetch(pr, repo):
         "head_sha": head,
         "url": v.get("url"),
         "checks": checks,
-        "threads": fetch_threads(pr, owner, name),
-        "awaiting_approval": fetch_awaiting_approval(owner, name, head),
+        "threads": fetch_threads(pr, owner, name, host),
+        "awaiting_approval": fetch_awaiting_approval(owner, name, head, host),
     }
 
 
-def fetch_awaiting_approval(owner, name, head):
+def fetch_awaiting_approval(owner, name, head, host=None):
     """Count Actions workflow runs on this head that are awaiting maintainer approval —
     the fork-PR security gate. Such a run has created NO check-run yet, so it is invisible
     to statusCheckRollup; without this, a fork PR blocked on approval reads as 'all checks ok'.
     Best-effort: any API/permission failure returns 0 rather than failing the tick."""
     if not head:
         return 0
-    r = _run(["gh", "api", f"repos/{owner}/{name}/actions/runs?head_sha={head}&per_page=50",
+    r = _run(["gh", "api", *_host_args(host),
+              f"repos/{owner}/{name}/actions/runs?head_sha={head}&per_page=50",
               "--jq", '[.workflow_runs[] | select(.status==\"action_required\" or .status==\"waiting\" '
                       'or .conclusion==\"action_required\")] | length'])
     if r.returncode != 0:
@@ -166,7 +178,7 @@ def fetch_awaiting_approval(owner, name, head):
         return 0
 
 
-def fetch_threads(pr, owner, name):
+def fetch_threads(pr, owner, name, host=None):
     """Unresolved review threads with their last-comment identity."""
     query = """
 query($owner:String!,$repo:String!,$pr:Int!,$cursor:String){
@@ -178,7 +190,7 @@ query($owner:String!,$repo:String!,$pr:Int!,$cursor:String){
     out = []
     cursor = None
     while True:
-        args = ["gh", "api", "graphql", "-f", f"owner={owner}", "-f", f"repo={name}",
+        args = ["gh", "api", "graphql", *_host_args(host), "-f", f"owner={owner}", "-f", f"repo={name}",
                 "-F", f"pr={pr}", "-f", f"query={query}"]
         if cursor:
             args += ["-f", f"cursor={cursor}"]
@@ -450,6 +462,7 @@ def diff(state, cur, now=None):
         "url": cur["url"],
         "has_failing_checks": has_failing,
         "checks_terminal": checks_terminal,
+        "checks_present": bool(cur["checks"]),
         "all_checks_ok": all_checks_ok,
         "checks_awaiting_approval": awaiting_approval,
         "blocked_external": blocked_external,

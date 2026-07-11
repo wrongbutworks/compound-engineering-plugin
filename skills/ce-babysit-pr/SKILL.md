@@ -45,7 +45,7 @@ If the user passed a mode, honor it. Otherwise infer continuous-vs-checkpoint fr
 Same tick engine, three deltas:
 
 1. **Delegates run non-interactively.** Invoke `ce-resolve-pr-feedback mode:pipeline` for comments and `ce-debug mode:pipeline` for CI; collect their structured results (fixes + residuals). Never ask the user anything.
-2. **Bounded stop, not merge-ready.** Exit when every check has reached a **terminal** state and no actionable backlog remains, OR a fix/round/time budget is hit — **never** wait for the merge-ready settle window or human approval (those are interactive-only). This is what preserves an orchestrator's terminate-and-exit contract.
+2. **Bounded stop, not merge-ready.** Exit when every check has reached a **terminal** state, **at least one check has actually been observed** (`checks_present` — an empty `statusCheckRollup` right after PR creation means Actions has not created check-runs *yet*, not that CI passed), and no actionable backlog remains — OR a fix/round/time budget is hit. **Never** wait for the merge-ready settle window or human approval (those are interactive-only). On an empty check set, keep ticking until checks materialize or the time budget expires; if none ever appear by the budget, return a `no-checks-observed` result rather than a false success — this is what stops `lfg`/auto-babysit from exiting "successful" before CI has even started. This preserves an orchestrator's terminate-and-exit contract.
 3. **Native residual surfacing + structured return.** Needs-human review threads stay open (the resolver posts `decision_context` there). Anything with no thread home — CI you could not fix after budget, a `needs-human` from `ce-debug` — goes into **one run-report PR comment** (a point-in-time narrative), never a PR-body section. Return a structured result: `{ status, checks_terminal, fixes_applied, residuals: [...] }`.
 
 ## Step 2: Run one tick
@@ -94,7 +94,7 @@ These are decisions the resolver judged would change intended behavior or need a
 
 ## Step 3: Stop conditions
 
-**In `mode:pipeline`, use the bounded pipeline stop** (Step 1's Pipeline-mode delta 2): exit when all checks are terminal and no actionable backlog remains, or a budget is hit — **skip** the merge-ready-settled condition below (never wait for the settle window or human approval). The terminal and blocked conditions still apply.
+**In `mode:pipeline`, use the bounded pipeline stop** (Step 1's Pipeline-mode delta 2): exit when all checks are terminal, **at least one check has been observed** (`checks_present`; do **not** exit-success on an empty `statusCheckRollup` — Actions may not have created check-runs yet, so keep ticking until they materialize or the time budget expires, then return `no-checks-observed`), and no actionable backlog remains, or a budget is hit — **skip** the merge-ready-settled condition below (never wait for the settle window or human approval). The terminal and blocked conditions still apply.
 
 Otherwise (interactive continuous/checkpoint), stop and report when any holds:
 
